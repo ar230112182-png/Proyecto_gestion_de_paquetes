@@ -1,0 +1,316 @@
+[
+  {
+    "id": "hp_tab",
+    "type": "tab",
+    "label": "Proyecto Huella",
+    "disabled": false,
+    "info": "Control de acceso con sensor de huella (Arduino) + MySQL (BD dh) + página web en /huella"
+  },
+  {
+    "id": "hp_serial_cfg",
+    "type": "serial-port",
+    "name": "Arduino",
+    "serialport": "COM3",
+    "serialbaud": "9600",
+    "databits": "8",
+    "parity": "none",
+    "stopbits": "1",
+    "waitfor": "",
+    "dtr": "none",
+    "rts": "none",
+    "cts": "none",
+    "dsr": "none",
+    "newline": "\\n",
+    "bin": "false",
+    "out": "char",
+    "addchar": "",
+    "responsetimeout": "10000"
+  },
+  {
+    "id": "hp_db_cfg",
+    "type": "MySQLdatabase",
+    "name": "dh",
+    "host": "127.0.0.1",
+    "port": "3306",
+    "db": "dh",
+    "tz": "",
+    "charset": "UTF8"
+  },
+  {
+    "id": "hp_c1",
+    "type": "comment",
+    "z": "hp_tab",
+    "name": "1) Lectura del Arduino y registro de acceso",
+    "info": "",
+    "x": 230,
+    "y": 40,
+    "wires": []
+  },
+  {
+    "id": "hp_serial_in",
+    "type": "serial in",
+    "z": "hp_tab",
+    "name": "Arduino COM3",
+    "serial": "hp_serial_cfg",
+    "x": 120,
+    "y": 100,
+    "wires": [
+      [
+        "hp_parse",
+        "hp_dbg_raw"
+      ]
+    ]
+  },
+  {
+    "id": "hp_dbg_raw",
+    "type": "debug",
+    "z": "hp_tab",
+    "name": "Datos recibidos",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "x": 360,
+    "y": 60,
+    "wires": []
+  },
+  {
+    "id": "hp_inject",
+    "type": "inject",
+    "z": "hp_tab",
+    "name": "Simular huella ID 1",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "payload": "Found ID #1 with confidence of 150",
+    "payloadType": "str",
+    "x": 130,
+    "y": 160,
+    "wires": [
+      [
+        "hp_parse"
+      ]
+    ]
+  },
+  {
+    "id": "hp_parse",
+    "type": "function",
+    "z": "hp_tab",
+    "name": "Parsear 'Found ID #'",
+    "func": "// Entrada: una línea del Arduino (ej: \"Found ID #3 with confidence of 150\")\nconst linea = String(msg.payload).trim();\nconst m = linea.match(/Found ID #(\\d+)(?: with confidence of (\\d+))?/);\n\nif (m) {\n    msg.huella_id = parseInt(m[1], 10);\n    msg.confianza = m[2] ? parseInt(m[2], 10) : null;\n    msg.topic = \"SELECT nombre_usuario FROM usuarios_h WHERE id_uh = :id\";\n    msg.payload = { id: msg.huella_id };\n    return [msg, null];\n}\nif (linea.includes(\"No match found\")) {\n    return [null, { payload: \"Huella no reconocida por el sensor\" }];\n}\nreturn [null, null];",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 350,
+    "y": 130,
+    "wires": [
+      [
+        "hp_select"
+      ],
+      [
+        "hp_dbg_nomatch"
+      ]
+    ]
+  },
+  {
+    "id": "hp_dbg_nomatch",
+    "type": "debug",
+    "z": "hp_tab",
+    "name": "Sin coincidencia",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "x": 590,
+    "y": 180,
+    "wires": []
+  },
+  {
+    "id": "hp_select",
+    "type": "mysql",
+    "z": "hp_tab",
+    "mydb": "hp_db_cfg",
+    "name": "Buscar usuario",
+    "x": 580,
+    "y": 120,
+    "wires": [
+      [
+        "hp_eval"
+      ]
+    ]
+  },
+  {
+    "id": "hp_eval",
+    "type": "function",
+    "z": "hp_tab",
+    "name": "Evaluar acceso",
+    "func": "// Entrada: resultado del SELECT en msg.payload\nconst rows = msg.payload;\nconst hora = new Date().toLocaleTimeString('es-MX', { hour12: false });\n\nif (Array.isArray(rows) && rows.length > 0) {\n    const nombre = rows[0].nombre_usuario;\n    flow.set('ultimo', { nombre: nombre, id: msg.huella_id, fecha: hora, estado: 'concedido' });\n    node.status({ fill: \"green\", shape: \"dot\", text: \"Acceso: \" + nombre });\n\n    const insertar = {\n        huella_id: msg.huella_id,\n        topic: \"INSERT INTO logs_acceso (usuario_id, fecha) VALUES (:id, NOW())\",\n        payload: { id: msg.huella_id }\n    };\n    return [insertar, { payload: \"Acceso concedido a: \" + nombre }];\n}\n\nflow.set('ultimo', { nombre: 'Desconocido', id: msg.huella_id, fecha: hora, estado: 'denegado' });\nnode.status({ fill: \"red\", shape: \"ring\", text: \"ID \" + msg.huella_id + \" no encontrado\" });\nreturn [null, { payload: \"ID #\" + msg.huella_id + \" no encontrado.\" }];",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 780,
+    "y": 120,
+    "wires": [
+      [
+        "hp_insert"
+      ],
+      [
+        "hp_dbg_acceso"
+      ]
+    ]
+  },
+  {
+    "id": "hp_insert",
+    "type": "mysql",
+    "z": "hp_tab",
+    "mydb": "hp_db_cfg",
+    "name": "Guardar log",
+    "x": 980,
+    "y": 100,
+    "wires": [
+      [
+        "hp_dbg_insert"
+      ]
+    ]
+  },
+  {
+    "id": "hp_dbg_insert",
+    "type": "debug",
+    "z": "hp_tab",
+    "name": "Log guardado",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "x": 1170,
+    "y": 100,
+    "wires": []
+  },
+  {
+    "id": "hp_dbg_acceso",
+    "type": "debug",
+    "z": "hp_tab",
+    "name": "Resultado acceso",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "x": 1000,
+    "y": 160,
+    "wires": []
+  },
+  {
+    "id": "hp_c2",
+    "type": "comment",
+    "z": "hp_tab",
+    "name": "2) Página web en http://localhost:1880/huella",
+    "info": "",
+    "x": 250,
+    "y": 280,
+    "wires": []
+  },
+  {
+    "id": "hp_http_in",
+    "type": "http in",
+    "z": "hp_tab",
+    "name": "",
+    "url": "/huella",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 130,
+    "y": 340,
+    "wires": [
+      [
+        "hp_webfn"
+      ]
+    ]
+  },
+  {
+    "id": "hp_webfn",
+    "type": "function",
+    "z": "hp_tab",
+    "name": "Preparar consulta",
+    "func": "// Prepara la consulta del historial y recupera el último acceso\nlet ultimo = flow.get('ultimo');\nif (!ultimo) {\n    ultimo = { nombre: 'Esperando...', id: '-', fecha: '-', estado: 'espera' };\n    flow.set('ultimo', ultimo);\n}\nmsg.ultimo = ultimo;\nmsg.topic = \"SELECT u.nombre_usuario, l.usuario_id, \" +\n            \"DATE_FORMAT(l.fecha, '%Y-%m-%d %H:%i:%s') AS fecha \" +\n            \"FROM logs_acceso l LEFT JOIN usuarios_h u ON u.id_uh = l.usuario_id \" +\n            \"ORDER BY l.fecha DESC LIMIT 10\";\nmsg.payload = {};\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 330,
+    "y": 340,
+    "wires": [
+      [
+        "hp_hist"
+      ]
+    ]
+  },
+  {
+    "id": "hp_hist",
+    "type": "mysql",
+    "z": "hp_tab",
+    "mydb": "hp_db_cfg",
+    "name": "Últimos logs",
+    "x": 530,
+    "y": 340,
+    "wires": [
+      [
+        "hp_tpl"
+      ]
+    ]
+  },
+  {
+    "id": "hp_tpl",
+    "type": "template",
+    "z": "hp_tab",
+    "name": "HTML",
+    "field": "payload",
+    "fieldType": "msg",
+    "format": "handlebars",
+    "syntax": "mustache",
+    "template": "<!DOCTYPE html>\n<html lang=\"es\">\n<head>\n<meta charset=\"utf-8\">\n<meta http-equiv=\"refresh\" content=\"2\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Control de acceso por huella</title>\n<style>\n  body { font-family: system-ui, sans-serif; background:#f3f4f6; margin:0; padding:24px; color:#111827; }\n  h1 { font-size:1.4rem; }\n  .card { max-width:480px; padding:20px; border-radius:12px; background:#fff; border-left:8px solid #9ca3af; box-shadow:0 1px 4px rgba(0,0,0,.1); }\n  .card.concedido { border-color:#16a34a; }\n  .card.denegado { border-color:#dc2626; }\n  .label { font-size:.8rem; text-transform:uppercase; color:#6b7280; }\n  .nombre { font-size:2rem; font-weight:700; margin:6px 0; }\n  table { margin-top:12px; border-collapse:collapse; background:#fff; width:100%; max-width:480px; }\n  th, td { padding:8px 12px; text-align:left; border-bottom:1px solid #e5e7eb; }\n  th { background:#e5e7eb; }\n</style>\n</head>\n<body>\n  <h1>Control de acceso por huella</h1>\n  <div class=\"card {{ultimo.estado}}\">\n    <div class=\"label\">Último acceso</div>\n    <div class=\"nombre\">{{ultimo.nombre}}</div>\n    <div>ID: {{ultimo.id}} &middot; Hora: {{ultimo.fecha}}</div>\n  </div>\n  <h2>Últimos 10 registros</h2>\n  <table>\n    <tr><th>Usuario</th><th>ID</th><th>Fecha</th></tr>\n    {{#payload}}\n    <tr><td>{{nombre_usuario}}</td><td>{{usuario_id}}</td><td>{{fecha}}</td></tr>\n    {{/payload}}\n  </table>\n</body>\n</html>",
+    "output": "str",
+    "x": 710,
+    "y": 340,
+    "wires": [
+      [
+        "hp_http_out"
+      ]
+    ]
+  },
+  {
+    "id": "hp_http_out",
+    "type": "http response",
+    "z": "hp_tab",
+    "name": "",
+    "statusCode": "",
+    "headers": {
+      "Content-Type": "text/html; charset=utf-8"
+    },
+    "x": 880,
+    "y": 340,
+    "wires": []
+  }
+]
